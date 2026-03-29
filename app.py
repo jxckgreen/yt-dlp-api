@@ -6,16 +6,25 @@ from flask_cors import CORS
 
 
 def write_netscape_cookies(cookie_string: str, filepath: str):
-    """Convert a browser cookie string to a Netscape cookie file for yt-dlp."""
-    lines = ["# Netscape HTTP Cookie File\n"]
-    for part in cookie_string.split(";"):
-        part = part.strip()
-        if "=" not in part:
-            continue
-        name, _, value = part.partition("=")
-        lines.append(f".instagram.com\tTRUE\t/\tTRUE\t2147483647\t{name.strip()}\t{value.strip()}\n")
-    with open(filepath, "w") as f:
-        f.writelines(lines)
+    """Write cookies to a Netscape cookie file for yt-dlp.
+    Accepts either a full Netscape cookie file or a browser cookie string (name=value; ...).
+    """
+    cookie_string = cookie_string.strip()
+    if "# Netscape HTTP Cookie File" in cookie_string:
+        # Already in Netscape format — write as-is
+        with open(filepath, "w") as f:
+            f.write(cookie_string)
+    else:
+        # Browser cookie string format: name=value; name2=value2
+        lines = ["# Netscape HTTP Cookie File\n"]
+        for part in cookie_string.split(";"):
+            part = part.strip()
+            if "=" not in part:
+                continue
+            name, _, value = part.partition("=")
+            lines.append(f".instagram.com\tTRUE\t/\tTRUE\t2147483647\t{name.strip()}\t{value.strip()}\n")
+        with open(filepath, "w") as f:
+            f.writelines(lines)
 
 app = Flask(__name__)
 CORS(app)
@@ -34,7 +43,8 @@ def download():
 
     url = data["url"].strip()
 
-    with tempfile.TemporaryDirectory() as tmpdir:
+    tmpdir = tempfile.mkdtemp()
+    try:
         output_path = os.path.join(tmpdir, "video.%(ext)s")
 
         ydl_opts = {
@@ -46,7 +56,6 @@ def download():
         }
 
         ig_cookies = os.environ.get("INSTAGRAM_COOKIES")
-        cookie_file = None
         if ig_cookies and "instagram.com" in url:
             cookie_file = os.path.join(tmpdir, "ig_cookies.txt")
             write_netscape_cookies(ig_cookies, cookie_file)
@@ -61,8 +70,8 @@ def download():
         except Exception as e:
             return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
 
-        # Find the downloaded file
-        files = os.listdir(tmpdir)
+        # Find the downloaded video file (exclude cookie files)
+        files = [f for f in os.listdir(tmpdir) if not f.endswith(".txt")]
         if not files:
             return jsonify({"error": "Download produced no output file."}), 502
 
@@ -72,9 +81,13 @@ def download():
         file_size = os.path.getsize(filepath)
 
         def generate():
-            with open(filepath, "rb") as f:
-                while chunk := f.read(1024 * 64):
-                    yield chunk
+            try:
+                with open(filepath, "rb") as f:
+                    while chunk := f.read(1024 * 64):
+                        yield chunk
+            finally:
+                import shutil
+                shutil.rmtree(tmpdir, ignore_errors=True)
 
         return Response(
             stream_with_context(generate()),
@@ -85,6 +98,10 @@ def download():
                 "Cache-Control": "no-store",
             },
         )
+    except Exception:
+        import shutil
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        raise
 
 
 if __name__ == "__main__":
