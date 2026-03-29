@@ -1,0 +1,4 @@
+node_modules/
+yt-dlp-binary
+yt-dlp-binary.exe
+.env
