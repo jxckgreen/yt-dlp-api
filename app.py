@@ -1,8 +1,8 @@
 import os
+import tempfile
 import yt_dlp
 from flask import Flask, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
-import requests
 
 app = Flask(__name__)
 CORS(app)
@@ -21,65 +21,50 @@ def download():
 
     url = data["url"].strip()
 
-    ydl_opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "skip_download": True,
-        "format": "best[ext=mp4]/best",
-    }
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_path = os.path.join(tmpdir, "video.%(ext)s")
 
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-    except yt_dlp.utils.DownloadError as e:
-        msg = str(e).replace("ERROR: ", "")
-        return jsonify({"error": msg}), 502
-    except Exception as e:
-        return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
+        ydl_opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "format": "best[ext=mp4]/best",
+            "outtmpl": output_path,
+            "noplaylist": True,
+        }
 
-    # Pick best single-stream URL
-    video_url = info.get("url")
-    http_headers = info.get("http_headers", {})
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
+        except yt_dlp.utils.DownloadError as e:
+            msg = str(e).replace("ERROR: ", "")
+            return jsonify({"error": msg}), 502
+        except Exception as e:
+            return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
 
-    if not video_url and info.get("formats"):
-        for fmt in reversed(info["formats"]):
-            if fmt.get("url") and fmt.get("ext") == "mp4":
-                video_url = fmt["url"]
-                http_headers = fmt.get("http_headers", http_headers)
-                break
-        if not video_url:
-            last = info["formats"][-1]
-            video_url = last.get("url")
-            http_headers = last.get("http_headers", http_headers)
+        # Find the downloaded file
+        files = os.listdir(tmpdir)
+        if not files:
+            return jsonify({"error": "Download produced no output file."}), 502
 
-    if not video_url:
-        return jsonify({"error": "Could not extract a direct video URL."}), 502
-
-    # Stream the video from the CDN using yt-dlp's own headers
-    try:
-        cdn_res = requests.get(video_url, headers=http_headers, stream=True, timeout=60)
-        if not cdn_res.ok:
-            return jsonify({"error": f"CDN returned {cdn_res.status_code}"}), 502
-
-        content_type = cdn_res.headers.get("Content-Type", "video/mp4")
-        content_length = cdn_res.headers.get("Content-Length")
-
-        response_headers = {"Content-Type": content_type}
-        if content_length:
-            response_headers["Content-Length"] = content_length
+        filepath = os.path.join(tmpdir, files[0])
+        ext = os.path.splitext(files[0])[1].lstrip(".")
+        content_type = f"video/{ext}" if ext else "video/mp4"
+        file_size = os.path.getsize(filepath)
 
         def generate():
-            for chunk in cdn_res.iter_content(chunk_size=1024 * 64):
-                if chunk:
+            with open(filepath, "rb") as f:
+                while chunk := f.read(1024 * 64):
                     yield chunk
 
         return Response(
             stream_with_context(generate()),
             status=200,
-            headers=response_headers,
+            headers={
+                "Content-Type": content_type,
+                "Content-Length": str(file_size),
+                "Cache-Control": "no-store",
+            },
         )
-    except Exception as e:
-        return jsonify({"error": f"Failed to stream video: {str(e)}"}), 502
 
 
 if __name__ == "__main__":
