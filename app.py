@@ -25,7 +25,7 @@ def download():
         "quiet": True,
         "no_warnings": True,
         "skip_download": True,
-        "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        "format": "best[ext=mp4]/best",
     }
 
     try:
