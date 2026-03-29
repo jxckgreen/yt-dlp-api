@@ -32,6 +32,10 @@ def download():
             "noplaylist": True,
         }
 
+        ig_cookies = os.environ.get("INSTAGRAM_COOKIES")
+        if ig_cookies and "instagram.com" in url:
+            ydl_opts["http_headers"] = {"Cookie": ig_cookies}
+
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
