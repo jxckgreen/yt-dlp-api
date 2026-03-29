@@ -4,6 +4,19 @@ import yt_dlp
 from flask import Flask, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
 
+
+def write_netscape_cookies(cookie_string: str, filepath: str):
+    """Convert a browser cookie string to a Netscape cookie file for yt-dlp."""
+    lines = ["# Netscape HTTP Cookie File\n"]
+    for part in cookie_string.split(";"):
+        part = part.strip()
+        if "=" not in part:
+            continue
+        name, _, value = part.partition("=")
+        lines.append(f".instagram.com\tTRUE\t/\tTRUE\t2147483647\t{name.strip()}\t{value.strip()}\n")
+    with open(filepath, "w") as f:
+        f.writelines(lines)
+
 app = Flask(__name__)
 CORS(app)
 
@@ -33,8 +46,11 @@ def download():
         }
 
         ig_cookies = os.environ.get("INSTAGRAM_COOKIES")
+        cookie_file = None
         if ig_cookies and "instagram.com" in url:
-            ydl_opts["http_headers"] = {"Cookie": ig_cookies}
+            cookie_file = os.path.join(tmpdir, "ig_cookies.txt")
+            write_netscape_cookies(ig_cookies, cookie_file)
+            ydl_opts["cookiefile"] = cookie_file
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
